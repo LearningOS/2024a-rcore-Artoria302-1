@@ -262,6 +262,42 @@ impl MemorySet {
             false
         }
     }
+
+    /// mmap
+    pub fn mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, map_perm: MapPermission) -> isize {
+        let map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm);
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let range = VPNRange::new(start_vpn, end_vpn);
+        for area in self.areas.iter() {
+            if area.vpn_range.overlap(&range) {
+                return -1;
+            }
+        }
+        self.push(map_area, None);
+        0
+    }
+
+    /// munmap
+    pub fn munmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let range = VPNRange::new(start_vpn, end_vpn);
+        let mut idx = None;
+        for (i, area) in self.areas.iter_mut().enumerate() {
+            if area.vpn_range.equal(&range) {
+                area.unmap(&mut self.page_table);
+                idx = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = idx {
+            self.areas.remove(idx);
+            0
+        } else {
+            -1
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -302,7 +338,6 @@ impl MapArea {
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
     }
-    #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {
             self.data_frames.remove(&vpn);
@@ -314,7 +349,6 @@ impl MapArea {
             self.map_one(page_table, vpn);
         }
     }
-    #[allow(unused)]
     pub fn unmap(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.unmap_one(page_table, vpn);

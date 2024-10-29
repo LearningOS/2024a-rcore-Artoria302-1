@@ -14,8 +14,12 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
+use crate::syscall::TaskInfo;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -79,6 +83,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.first_scheduled_time_msec = get_time_ms();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -139,7 +144,11 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
-            inner.tasks[next].task_status = TaskStatus::Running;
+            let next_task = &mut inner.tasks[next];
+            next_task.task_status = TaskStatus::Running;
+            if next_task.first_scheduled_time_msec == 0 {
+                next_task.first_scheduled_time_msec = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +161,49 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Record syscall times
+    pub fn record_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task = &mut inner.tasks[current];
+        assert!(syscall_id < MAX_SYSCALL_NUM);
+        task.syscall_times[syscall_id] += 1;
+    }
+
+    /// Get current task control block
+    pub fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task = &inner.tasks[current];
+        let current_time = get_time_ms();
+        let time = if current_time > task.first_scheduled_time_msec {
+            current_time - task.first_scheduled_time_msec
+        } else {
+            0
+        };
+        TaskInfo {
+            status: task.task_status,
+            syscall_times: task.syscall_times,
+            time,
+        }
+    }
+
+    /// mmap
+    pub fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, map_perm: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current = &mut inner.tasks[current];
+        current.memory_set.mmap(start_va, end_va, map_perm)
+    }
+
+    /// mmap
+    pub fn munmap(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current = &mut inner.tasks[current];
+        current.memory_set.munmap(start_va, end_va)
     }
 }
 
