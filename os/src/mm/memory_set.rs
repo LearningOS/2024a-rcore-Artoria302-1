@@ -300,7 +300,54 @@ impl MemorySet {
             false
         }
     }
+
+    /// mmap
+    pub fn mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, map_perm: MapPermission) -> isize {
+        let map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm);
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let range = VPNRange::new(start_vpn, end_vpn);
+        for area in self.areas.iter() {
+            if overlap(&area.vpn_range, &range) {
+                return -1;
+            }
+        }
+        self.push(map_area, None);
+        0
+    }
+
+    /// munmap
+    pub fn munmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let range = VPNRange::new(start_vpn, end_vpn);
+        let mut idx = None;
+        for (i, area) in self.areas.iter_mut().enumerate() {
+            if equal(&area.vpn_range, &range) {
+                area.unmap(&mut self.page_table);
+                idx = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = idx {
+            self.areas.remove(idx);
+            0
+        } else {
+            -1
+        }
+    }
 }
+
+#[inline(always)]
+fn overlap(this: &VPNRange, other: &VPNRange) -> bool {
+    this.get_start() < other.get_end() && other.get_start() < this.get_end()
+}
+
+#[inline(always)]
+fn equal(this: &VPNRange, other: &VPNRange) -> bool {
+    this.get_start() == other.get_start() && this.get_end() == other.get_end()
+}
+
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
     vpn_range: VPNRange,
