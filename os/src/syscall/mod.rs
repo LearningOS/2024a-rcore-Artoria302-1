@@ -111,7 +111,7 @@ use process::*;
 use sync::*;
 use thread::*;
 
-use crate::fs::Stat;
+use crate::{fs::Stat, mm::translated_byte_buffer, task::current_user_token};
 
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
@@ -153,5 +153,24 @@ pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
         SYSCALL_CONDVAR_WAIT => sys_condvar_wait(args[0], args[1]),
         SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
+    }
+}
+
+fn struct_copy<T: Sized>(dst: *mut T, src: *const T) {
+    let len = core::mem::size_of::<T>();
+    let mut buffers = translated_byte_buffer(current_user_token(), dst as *const u8, len);
+    let src = src as *const u8;
+    memory_copy(buffers.as_mut_slice(), src);
+}
+
+fn memory_copy(buffers: &mut [&mut [u8]], src: *const u8) {
+    let mut i = 0;
+    for buf in buffers.iter_mut() {
+        for v in buf.iter_mut() {
+            unsafe {
+                *v = *src.add(i);
+            }
+            i += 1;
+        }
     }
 }
